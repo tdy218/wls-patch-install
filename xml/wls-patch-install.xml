@@ -1,0 +1,405 @@
+<?xml version="1.0"?>
+<project name="wls-patch-installation" default="smartupdate-version-check" basedir="../">
+  <property name="bea-home" value="${bea.home}"/>
+	<property name="wl-home" value="${wl.home}"/>
+	<property name="java-home" value="${java.home}"/>
+  <property name="user-name" value="${user.name}"/>
+  <property name="user-home" value="${user.home}"/>
+
+  <property name="log-dir" value="${basedir}/logs"/>
+  <property name="lib-dir" value="${basedir}/lib"/>
+	<property name="su-patch-dir" value="${basedir}/smartupdate"/>
+  <property name="su-enhancement-patch-dir" value="${su-patch-dir}/enhancement_v3.0"/>
+	<property name="tmp-dir" value="${basedir}/tmp"/>
+	<property name="patch-downloaded-dir" value="${basedir}/patch"/>
+	<property name="bsu-dir" value="${bea-home}/utils/bsu"/>
+	<!-- <property name="java-user-pref-dir" value="${user.home}/.java/.userPrefs"/> -->
+	<property name="xml-dir" value="${basedir}/xml"/>
+
+  <tstamp>
+    <format property="timestamp" timezone="GMT+8:00" pattern="yyyyMMdd_HHmmss"/>
+  </tstamp>
+
+	<property name="su-silent-template-file" value="${xml-dir}/smartupdate-silent-template.xml"/>
+	<property name="su-silent-file" value="${xml-dir}/smartupdate-silent.xml"/>
+	
+	<property name="su-patch-jar-file" value="${su-patch-dir}/modified_patch330.jar"/>
+	<property name="su-jar-file" value="${bea-home}/utils/bsu/patch-client.jar"/>
+
+	<property name="su-upgrading-log" value="${log-dir}/smartupdate-upgrading.${user-name}.${timestamp}.log"/>
+	<property name="patch-install-log" value="${log-dir}/patch-install.${user-name}.${timestamp}.log"/>
+	<property name="remove-conflicting-patchlist-log" value="${log-dir}/remove-conflicting-patchlist.${user-name}.${timestamp}.log"/>
+	
+	<taskdef name="xmltask" classname="com.oopsconsultancy.xmltask.ant.XmlTask">
+    <classpath>
+      <fileset dir="${lib-dir}">
+        <include name="**/*.jar"/>
+      </fileset>
+    </classpath>
+	</taskdef>
+
+	<taskdef resource="net/sf/antcontrib/antlib.xml">
+    <classpath>
+      <pathelement location="${lib-dir}/ant-contrib/ant-contrib-1.0b3.jar"/>
+    </classpath>
+	</taskdef>
+
+	<taskdef name="compare" classname="com.orangevolt.tools.ant.CompareTask">
+	  <classpath>
+	    <pathelement location="${lib-dir}/ant-orangevolt/orangevolt-ant-tasks-1.3.8.jar"/>
+	  </classpath>
+	</taskdef>
+
+  <path id="wlspatchinstallhelper.classpath">
+    <fileset dir="${lib-dir}/smartupdate-moudles">
+      <include name="**/*.jar"/>
+    </fileset>
+    <pathelement location="${lib-dir}/wls-patch-install-helper/wls-patch-install-helper.jar"/>
+  </path>
+
+  <taskdef name="wlpdownloaddir" classname="com.tdy218.wls.applying.patches.PatchDownloadDirDetecter">
+    <classpath refid="wlspatchinstallhelper.classpath"/>
+  </taskdef>
+
+  <taskdef name="wlplist" classname="com.tdy218.wls.applying.patches.PatchInstalledDetecter">
+    <classpath refid="wlspatchinstallhelper.classpath"/>
+  </taskdef>
+
+	<taskdef name="wlpinstall" classname="com.tdy218.wls.applying.patches.PatchInstallConflictDetecter">
+    <classpath refid="wlspatchinstallhelper.classpath"/>
+	</taskdef>	
+
+  <target name="generate-smartupdate-silent.xml">
+  	<echo message="Generate a smartupdate-silent.xml file for smart update installation."/>
+  	<xmltask source="${su-silent-template-file}" dest="${su-silent-file}" encoding="UTF-8">
+  	  <attr path="//data-value[@name='BEAHOME']" attr="value" value="${bea-home}"/>
+  	</xmltask>
+  </target>
+
+  <target name="smartupdate-version-check">
+    <mkdir dir="${tmp-dir}"/>
+    <echo message="Check the embedded smart update version..."/>
+    <java jar="${su-jar-file}" fork="true" outputproperty="smartupdate_version_output">
+      <jvmarg value="-Xmx1024m"/>
+      <jvmarg value="-XX:-UseGCOverheadLimit"/>
+      <jvmarg value="-Djava.security.egd=file:/dev/./urandom"/>
+      <jvmarg value="-Duser.language=en -Duser.country=US -Dfile.encoding=US-ASCII"/>
+      <arg value="-version"/>
+    </java>
+    <propertyregex property="smartupdate.version"
+      input="${smartupdate_version_output}"
+      regexp="Version:\ (.*)"
+      select="\1"
+      casesensitive="false"/>
+    <echo message="The smart update version is: ${smartupdate.version}"/>
+    <compare arg1="${smartupdate.version}" arg2="3.3.0.0" trim="true">
+      <lesser property="smartupdate.version.lesser"/>
+    </compare>
+    <if>
+      <equals arg1="${smartupdate.version.lesser}" arg2="true"/>
+      <then>
+        <echo message="The smart update's version is low, it will be upgraded to 3.3.0.0"/>
+        <antcall target="generate-smartupdate-silent.xml"/>
+        <antcall target="smartupdate-upgrading-begin"/>
+      </then>
+      <else>
+        <echo message="It's no need to be upgraded, apply weblogic server patches immediately."/>
+        <antcall target="smartupdate-enhancement-patch-apply"/>
+      </else>
+    </if>
+  </target>
+	
+  <target name="smartupdate-upgrading-begin">
+        <echo message="Begin to upgrade smart update in silent mode."/>
+        <java jar="${su-patch-jar-file}" fork="true" resultproperty="su_upgrade_exit_code">
+           <jvmarg value="-Xmx1024m"/>
+           <jvmarg value="-XX:-UseGCOverheadLimit"/>
+           <jvmarg value="-Djava.security.egd=file:/dev/./urandom"/>
+           <jvmarg value="-Djava.io.tmpdir=${tmp-dir}"/>
+           <jvmarg value="-Duser.language=en -Duser.country=US -Dfile.encoding=US-ASCII"/>
+           <arg value="-mode=silent"/>
+           <arg value="-silent_xml=${su-silent-file}"/>
+           <arg value="-log=${su-upgrading-log}"/>
+        </java>
+        <antcall target="smartupdate-upgrading-check"/>
+  </target>
+
+  <target name="smartupdate-upgrading-check">
+      <if>
+          <equals arg1="${su_upgrade_exit_code}" arg2="0"/>
+          <then>
+              <echo message="The smart update has been upgraded completed successfully."/>
+              <antcall target="smartupdate-enhancement-patch-apply"/>
+          </then>
+          <else>
+              <echo message="The smart update is upgrading failed due to some errors, check the ${su-upgrading-log} please....."/>
+              <antcall target="installation-clean-and-exit"/>
+          </else>
+      </if>
+  </target>  	
+
+  <target name="smartupdate-enhancement-patch-apply">
+      <echo message="Copy the weblogic common jar patch file to ${bea-home}/modules directory."/>
+      <copy todir="${bea-home}/modules" overwrite="true">
+          <fileset dir="${su-enhancement-patch-dir}">
+              <include name="com.bea.cie.comdev_*.jar"/>
+          </fileset>
+      </copy>
+      <echo message="Copy the smart update client patch files to ${bea-home}/modules/features directory."/>
+      <copy todir="${bea-home}/modules/features" overwrite="true">
+          <fileset dir="${su-enhancement-patch-dir}">
+              <include name="com.bea.cie.patch-client_*"/>
+          </fileset>
+      </copy>
+      <antcall target="wls-patch-applying-prepare"/>
+  </target>   
+
+  <target name="wls-patch-applying-prepare">
+  	<loadproperties srcFile="${wl-home}/.product.properties"/>
+    <property name="wls-version" value="${WLS_PRODUCT_VERSION}"/>
+    <echo message="Get the weblogic version : ${wls-version}"/>
+    <if>
+    	<!-- <matches pattern="10.3.6.0" string="${wls-version}"/> -->
+    	<or>
+    		<matches pattern="10.3.[3-6].0" string="${wls-version}"/>
+            <matches pattern="12.1.1.0" string="${wls-version}"/>
+        </or>
+     	<then>
+     		<if>
+     			<resourcecount when="eq" count="1">
+     				<fileset id="zipfile" dir="${patch-downloaded-dir}/${wls-version}" erroronmissingdir="false">
+     					<include name="**/*.zip"/>
+     				</fileset>
+     			</resourcecount>
+     			<then>
+            <echo message="Patchlist archive file is found in ${patch-downloaded-dir}/${wls-version}."/>
+            <pathconvert property="zipfilefullname" refid="zipfile" />
+            <basename property="zipfilebasename" file="${zipfilefullname}" suffix=".zip"/>
+            <unzip dest="${tmp-dir}/${zipfilebasename}">
+              <fileset dir="${patch-downloaded-dir}/${wls-version}">
+                <include name="**/*.zip"/>
+              </fileset>
+              <patternset>
+                <exclude name="**/*.txt"/>
+              </patternset>
+            </unzip>
+            <fileset id="jarfile" dir="${tmp-dir}/${zipfilebasename}" erroronmissingdir="false">
+              <include name="**/*.jar"/>
+            </fileset>
+            <pathconvert property="jarfilefullname" refid="jarfile" />
+            <basename property="jarfilebasename" file="${jarfilefullname}" suffix=".jar"/>
+            <echo message="The patch which id is ${jarfilebasename} will be installed."/>
+            <!-- 由于多个下载的补丁需要与已安装的补丁compare逻辑语句写法复杂, 暂时只支持一次打一个补丁. -->
+     				<wlpdownloaddir property="wlpdownloaddir-defaultdownloaddir" beahome="${bea-home}"/>
+     				<if>
+     					<not>
+     						<available file="${wlpdownloaddir-defaultdownloaddir}" type="dir"/>
+     					</not>
+     					<then>
+     						<mkdir dir="${wlpdownloaddir-defaultdownloaddir}"/>
+     					</then>
+     				</if>
+            <copy todir="${wlpdownloaddir-defaultdownloaddir}" overwrite="true">
+              <fileset dir="${tmp-dir}/${zipfilebasename}">
+                <include name="**/*.xml"/>
+                <include name="**/*.jar"/>
+              </fileset>
+            </copy>
+     				<antcall target="wls-installed-patch-check"/>
+     			</then>
+     			<else>
+     				<echo message="Error ! None patch archive file or too many patch archive files under ${patch-downloaded-dir}/${wls-version}."/>
+     				<antcall target="installation-clean-and-exit"/>
+     			</else>
+     		</if>
+     	</then>
+     	<else>
+     		<echo message="This script doesn't support this weblogic version(${wls-version}) installed."/>
+     		<antcall target="installation-clean-and-exit"/>
+     	</else>
+    </if>
+  </target>
+
+  <target name="wls-installed-patch-check">
+  	<echo message="Check whether the weblogic had been applied any patch previously."/>
+    <wlplist property="wlplist-installedpatchlist" beahome="${bea-home}" wlhome="${wl-home}" cachedir="${wlpdownloaddir-defaultdownloaddir}"/>
+    <if>
+      <equals arg1="${wlplist-installedpatchlist}" arg2=""/>
+      <then>
+        <echo message="No patch was applied, apply the patch id ${jarfilebasename} immediately!"/>
+        <antcall target="wls-patch-applying-begin"/>        
+      </then>
+      <else>
+        <echo message="The weblogic had been applied patchlist which is ${wlplist-installedpatchlist}."/>
+        <if>
+           <contains string="${wlplist-installedpatchlist}" substring="${jarfilebasename}"/>
+           <then>
+            <echo message="The downloaded patch id ${jarfilebasename} had been applied, the script would be cleaned and exit!"/>
+            <antcall target="installation-clean-and-exit"/> 
+           </then>
+           <else>
+            <antcall target="wls-conflicting-patch-detect"/> 
+          </else>
+        </if>
+      </else>
+    </if>
+  </target>
+
+  <target name="wls-conflicting-patch-detect">
+    <echo message="Begin to detect conflict before applying patch id ${jarfilebasename}, Wait for a moment please..."/>
+  	<!-- detect conflict while patch installing. -->
+  	<wlpinstall property="wlpinstall-conflictpatchlist" patchid="${jarfilebasename}" beahome="${bea-home}" wlhome="${wl-home}" cachedir="${wlpdownloaddir-defaultdownloaddir}"/>
+  	<if>
+  		<equals arg1="${wlpinstall-conflictpatchlist}" arg2=""/>
+  		<then>
+  			<echo message="No conflict patchlist was detected, apply the patch id ${jarfilebasename} immediately!"/>
+  			<antcall target="wls-patch-applying-begin"/>  			
+  		</then>
+  		<else>
+        <echo message="Conflicting patchlist ${wlpinstall-conflictpatchlist} was detected, it would be removed before ${jarfilebasename} installation!"/>
+        <antcall target="wls-conflicting-patch-remove"/>
+      </else>
+    </if>
+  </target>
+
+  <target name="wls-conflicting-patch-remove">
+    <echo message="Remove the conflicting patchlist ${wlpinstall-conflictpatchlist}, wait for a moment please..."/>
+    <for list="${wlpinstall-conflictpatchlist}" param="conflict-patch" delimiter=",">
+      <sequential>
+        <echo message="Begin to remove the conflicting patch @{conflict-patch}..."/>
+        <java jar="${su-jar-file}" dir="${bsu-dir}" fork="true" outputproperty="remove_conflicting_patchlist_output">
+          <jvmarg value="-Xmx2048m"/>
+          <jvmarg value="-XX:-UseGCOverheadLimit"/>
+          <jvmarg value="-Djava.security.egd=file:/dev/./urandom"/>
+          <jvmarg value="-Duser.language=en -Duser.country=US -Dfile.encoding=US-ASCII"/>
+          <arg value="-remove"/>
+          <arg value="-patchlist=@{conflict-patch}"/>
+          <arg value="-prod_dir=${wl-home}"/>
+          <arg value="-log=${remove-conflicting-patchlist-log}"/>
+          <arg value="-log_priority=trace"/>
+        </java>
+        <!--  for resolving the contains string statement bug. -->
+        <sleep seconds="1"/>
+        <if>
+          <contains string="${remove_conflicting_patchlist_output}" substring="Result: Success"/>
+          <then>
+            <echo message="The conflicting patch @{conflict-patch} had been removed successfully."/>
+          </then>
+        </if>
+      </sequential>
+    </for>
+    <if>
+      <contains string="${remove_conflicting_patchlist_output}" substring="Result: Success"/>
+      <then>
+        <echo message="The conflicting patchlist ${wlpinstall-conflictpatchlist} was removed successfully."/>
+        <antcall target="wls-patch-applying-begin"/>
+      </then>
+      <else>
+        <echo message="The conflicting patchlist ${wlpinstall-conflictpatchlist} was removed failed due to some errors!"/>
+        <echo message="Check the error message in ${remove-conflicting-patchlist-log} please....."/>
+        <antcall target="installation-clean-and-exit"/>
+      </else>
+    </if>
+  </target>
+
+  <target name="wls-patch-applying-begin">
+  	<echo message="Apply the patch id ${jarfilebasename} by smart update, wait for a moment please..."/>
+  	<java jar="${su-jar-file}" fork="true" dir="${bsu-dir}" outputproperty="apply_patches_output">
+  		<jvmarg value="-Xmx2048m"/>
+      <jvmarg value="-XX:-UseGCOverheadLimit"/>
+  		<jvmarg value="-Djava.security.egd=file:/dev/./urandom"/>
+  		<jvmarg value="-Duser.language=en -Duser.country=US -Dfile.encoding=US-ASCII"/>
+  		<arg value="-install"/>
+  		<arg value="-prod_dir=${wl-home}"/>
+  		<arg value="-patchlist=${jarfilebasename}"/>
+  		<arg value="-log=${patch-install-log}"/>
+  		<arg value="-log_priority=trace"/>
+  	</java>
+  	<antcall target="wls-patch-applying-check"/>
+  </target> 	
+
+  <target name="wls-patch-applying-check">
+  	<echo message="Verify the applying result of patch id ${jarfilebasename}."/>
+    <wlplist property="wlplist-installedpatchlist" beahome="${bea-home}" wlhome="${wl-home}" cachedir="${wlpdownloaddir-defaultdownloaddir}"/>
+  	<!--  for resolving the contains string statement bug. -->
+  	<sleep seconds="1"/>
+  	<if>
+      <and>
+        <contains string="${wlplist-installedpatchlist}" substring="${jarfilebasename}" />
+      </and>
+      <then>
+        <echo message="The weblogic server patch id ${jarfilebasename} had been applied successfully."/>
+        <antcall target="installation-clean-and-exit"/>
+      </then>
+      <else>
+        <echo message="The weblogic server patch id ${jarfilebasename} was applied unsuccessfully due to some errors."/>
+        <echo message="Check the error message in ${patch-install-log} please....."/>
+        <antcall target="installation-clean-and-exit"/>
+      </else>
+  	</if>
+  </target>
+
+  <target name="installation-clean-and-exit">
+    <echo message="Clean the files which generated in previous operation."/>
+    <!--  for resolving the file deleting bug. -->
+    <sleep seconds="3"/>
+    <if>
+      <or>
+        <available file="uddiexplorer.war" filepath="${wl-home}/server/lib" type="file"/>
+        <available file="uddi.properties" filepath="${wl-home}/server/lib" type="file"/>
+        <available file="uddi.war" filepath="${wl-home}/server/lib" type="file"/>
+      </or>
+      <then>
+        <echo message="The uddi explorer related files was found, and it would be deleted."/>
+        <delete failonerror="false" verbose="true">
+          <fileset dir="${wl-home}/server/lib">
+            <include name="**/uddi*"/>
+          </fileset>
+        </delete>
+      </then>
+    </if>
+    <if>
+      <available file="wls-wsat.war" filepath="${wl-home}/server/lib" type="file"/>
+      <then>
+        <echo message="The web services atomic transactions application archive file was found, and it would be deleted."/>
+        <delete failonerror="false" verbose="true">
+          <fileset dir="${wl-home}/server/lib">
+            <include name="wls-wsat.war"/>
+          </fileset>
+        </delete>
+      </then>
+    </if>
+    <if>
+      <and>
+        <available file="${user-home}/bea" type="dir"/>
+        <resourcecount when="le" count="1">
+          <fileset dir="${user-home}/bea"/>
+        </resourcecount>
+      </and>
+      <then>
+        <delete dir="${user-home}/bea" includeemptydirs="true" failonerror="false"/>
+        <if>
+          <available file="${user-home}/bea" type="dir"/>
+          <then>
+            <sleep seconds="3"/>
+            <delete includeemptydirs="true" failonerror="false">
+              <fileset dir="${user-home}/bea"/>
+            </delete>
+          </then>
+        </if>
+      </then>
+    </if>
+    <delete file="${su-silent-file}" failonerror="false"/>
+    <delete dir="${tmp-dir}" includeemptydirs="true" failonerror="false"/>
+    <!-- The following if statement is used for deleting directory failure on windows sometimes. -->
+    <if> 
+      <available file="${tmp-dir}" type="dir"/>
+      <then>
+        <sleep seconds="3"/>
+        <delete includeemptydirs="true" failonerror="false">
+        	<fileset dir="${tmp-dir}"/>
+        </delete>
+      </then>
+    </if>
+  </target>
+</project>
