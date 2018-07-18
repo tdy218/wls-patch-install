@@ -35,7 +35,7 @@ root# ./main_launix.sh  （Windows环境, 解压后直接双击里面的main_win
 ```
 weblogic$ tar zxvf wls-patch-install.20171229.tar.gz
 weblogic$ cd wls-patch-install
-weblogic$ ./install_psu.sh <WL_HOME变量值>  （例如: ./install_psu.sh  /weblogic/wlserver_10.3）  
+weblogic$ ./install_psu.sh <WL_HOME变量值>  （例如: ./install_psu.sh  /weblogic/wls1036/wlserver_10.3）  
 ```
 
 ### 【注意事项】  
